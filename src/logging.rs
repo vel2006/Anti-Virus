@@ -3,6 +3,7 @@ use std::io::{Write, Read};
 use sha2::{Sha256, Digest};
 
 // Stuct for logging data in a secure manner
+#[derive(Debug)]
 pub struct Logger
 {
     logging_directory: String,

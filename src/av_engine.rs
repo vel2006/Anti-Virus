@@ -1,4 +1,4 @@
-use std::io;
+// Generic imports for allowing the AV engine to do what it does
 use std::mem;
 use std::ptr;
 use windows::{
@@ -13,7 +13,11 @@ use windows::{
     }
 };
 
+// Importing the logging functionality
+use super::logging::*;
+
 // A way to hold settings during runtime
+#[derive(Debug)]
 struct Settings
 {
     // Detection automation based
@@ -22,22 +26,27 @@ struct Settings
     run: bool,
     // Allow / exemptions
     whitelist_users: Vec<String>,
-    whitelist_programs: Vec<String>
+    whitelist_programs: Vec<String>,
+    blacklist_programs: Vec<String>,
 }
 
+#[derive(Debug)]
 pub struct AVEngine
 {
     // Using the defined settings for usability
     settings: Settings,
+    // Using logging to hold data
+    logger: Logger,
 }
 
 // Creating the settings for this program
 impl Settings
 {
     // Creating a new Settings struct
-    fn new(stop_process_on_detection:bool, remove_user_on_detection:bool, whitelist_programs: Option<Vec<String>>, whitelist_users: Option<Vec<String>>) -> Self
+    fn new(stop_process_on_detection:bool, remove_user_on_detection:bool, whitelist_programs: Option<Vec<String>>, blacklist_programs: Option<Vec<String>>, whitelist_users: Option<Vec<String>>) -> Self
     {
         let mut allowed_programs: Vec<String> = Vec::new();
+        let mut denied_programs: Vec<String> = Vec::new();
         let mut allowed_users: Vec<String> = Vec::new();
         if let Some(mut programs) = whitelist_programs
         {
@@ -45,6 +54,10 @@ impl Settings
         } else {
             let mut programs: Vec<String> = filter_program_list(get_running_processes());
             allowed_programs.append(&mut programs);
+        }
+        if let Some(mut programs) = blacklist_programs
+        {
+            denied_programs.append(&mut programs);
         }
         if let Some(mut users) = whitelist_users
         {
@@ -56,13 +69,18 @@ impl Settings
         let settings: Settings = Settings {
             kill_process_on_detection: stop_process_on_detection,
             kill_user_on_detection: remove_user_on_detection,
-            run: true,
+            run: false,
             whitelist_users: allowed_users,
-            whitelist_programs: allowed_programs
+            whitelist_programs: allowed_programs,
+            blacklist_programs: denied_programs
         };
         return settings;
     }
+
+    //
     // Changing settings functions
+    //
+    // On program detection action
     fn enable_process_on_detection(&mut self)
     {
         self.kill_process_on_detection = true;
@@ -71,6 +89,7 @@ impl Settings
     {
         self.kill_process_on_detection = false;
     }
+    // On user detection action
     fn enable_user_on_detection(&mut self)
     {
         self.kill_user_on_detection = true;
@@ -79,14 +98,20 @@ impl Settings
     {
         self.kill_user_on_detection = false;
     }
+    // Enable AV
     fn enable_av(&mut self)
     {
         self.run = true;
     }
+    // Disabling AV
     fn disable_av(&mut self)
     {
         self.run = false;
     }
+
+    //
+    // Whitelist programs
+    //
     fn change_whitelist_programs(&mut self, new_list: Vec<String>)
     {
         self.whitelist_programs.clear();
@@ -102,8 +127,37 @@ impl Settings
     }
     fn remove_whitelist_program(&mut self, program_index: usize)
     {
-        self.whitelist_programs.remove(program_index);
+        _ = self.whitelist_programs.remove(program_index);
     }
+    fn strip_whitelist_program(&mut self, mut program: String)
+    {
+        _ = self.whitelist_programs.dedup_by_key(|key| key == &program);
+    }
+
+    //
+    // Black list programs
+    //
+    fn change_blacklist_programs(&mut self, new_list: Vec<String>)
+    {
+        self.blacklist_programs.clear();
+        self.blacklist_programs = new_list;
+    }
+    fn add_blacklist_program(&mut self, program_name: String)
+    {
+        self.blacklist_programs.push(program_name);
+    }
+    fn remove_blacklist_program(&mut self, program_index: usize)
+    {
+        _ = self.blacklist_programs.remove(program_index);
+    }
+    fn strip_blacklist_program(&mut self, mut program: String)
+    {
+        _ = self.blacklist_programs.dedup_by_key(|key| key == &program);
+    }
+
+    //
+    // Whitelist users
+    //
     fn change_whitelist_users(&mut self, new_list: Vec<String>)
     {
         self.whitelist_users.clear();
@@ -119,9 +173,16 @@ impl Settings
     }
     fn remove_whitelist_user(&mut self, user_index: usize)
     {
-        self.whitelist_users.remove(user_index);
+        _ = self.whitelist_users.remove(user_index);
     }
+    fn strip_whitelist_user(&mut self, mut user: String)
+    {
+        _ = self.whitelist_users.dedup_by_key(|key| key == &user);
+    }
+
+    //
     // Getting settings functions
+    //
     fn get_process_on_detection(&mut self) -> bool
     {
         return self.kill_process_on_detection.clone();
@@ -138,6 +199,10 @@ impl Settings
     {
         return self.whitelist_programs.clone();
     }
+    fn get_blacklist_programs(&mut self) -> Vec<String>
+    {
+        return self.blacklist_programs.clone();
+    }
     fn get_whitelist_users(&mut self) -> Vec<String>
     {
         return self.whitelist_users.clone();
@@ -148,10 +213,11 @@ impl Settings
 impl AVEngine
 {
     // Creating a new AVEngine impl
-    pub fn new(stop_process_on_detection: bool, remove_user_on_detection: bool, whitelist_programs: Option<Vec<String>>, whitelist_users: Option<Vec<String>>) -> Self
+    pub fn new(stop_process_on_detection: bool, remove_user_on_detection: bool, whitelist_programs: Option<Vec<String>>, blacklist_programs: Option<Vec<String>>, whitelist_users: Option<Vec<String>>, log_directory: String, alerts_per_log: usize) -> Self
     {
         return AVEngine {
-            settings: Settings::new(stop_process_on_detection, remove_user_on_detection, whitelist_programs, whitelist_users)
+            settings: Settings::new(stop_process_on_detection, remove_user_on_detection, whitelist_programs, blacklist_programs, whitelist_users),
+            logger: Logger::new(log_directory, alerts_per_log),
         };
     }
     // Getting the currently running programs names
@@ -171,31 +237,99 @@ impl AVEngine
                 let (program_name, program_pid) = program;
                 if !allowed_programs.contains(&program_name)
                 {
-                    println!("Detected unsaved program: {} - PID: {:?}", program_name, program_pid);
-                    if self.settings.get_process_on_detection()
-                    {
-                        kill_pid(program_pid);
-                    } else {
-                        let mut input_value: String = String::new();
-                        println!("Select one of the following. [allow, deny] (deny is default)");
-                        io::stdin().read_line(&mut input_value).expect("Cannot read user input.");
-                        let check_value: &str = &input_value.as_str();
-                        match check_value
-                        {
-                            "allow\r\n" => {
-                                self.settings.add_whitelist_program(program_name.clone());
-                                println!("Added program: {} to allow list.", program_name);
-                            },
-                            _ => {
-                                kill_pid(program_pid);
-                            }
-                        }
-                    }
+                    let alert: String = format!("Detected unsaved program: {} - PID: {:?}", program_name, program_pid);
+                    self.logger.log_string(alert);
+                    kill_pid(program_pid);
                 }
             }
         }
     }
+    // Getting new programs
+    pub fn detect_programs(&mut self) -> Option<Vec<String>>
+    {
+        let mut found: Vec<String> = Vec::new();
+        let allowed_programs: Vec<String> = self.settings.get_whitelist_programs();
+        for program in get_running_processes().iter()
+        {
+            let (program_name, program_pid) = program;
+            if !allowed_programs.contains(program_name)
+            {
+                let alert: String = format!("Questioning unsaved program: {} - PID: {}", program_name, program_pid);
+                println!("{}", alert);
+                self.logger.log_string(alert);
+                found.push(program_name.clone());
+            }
+        }
+        if found.len() > 0
+        {
+            found.dedup();
+            return Some(found);
+        }
+        return None;
+    }
+    // Killing a process via name
+    pub fn kill_process(&mut self, target_process: String)
+    {
+        for process in get_running_processes()
+        {
+            let (process_name, process_pid) = process;
+            if process_name == target_process
+            {
+                kill_pid(process_pid);
+            }
+        }
+    }
+    // Getting the blacklisted programs
+    pub fn get_blacklisted_programs(&mut self) -> Vec<String>
+    {
+        return self.settings.get_blacklist_programs();
+    }
+    // Removing allowed programs by their name
+    pub fn remove_whitelist_program(&mut self, program: String) -> bool
+    {
+        if self.settings.get_whitelist_programs().contains(&program)
+        {
+            self.settings.strip_whitelist_program(program.clone());
+            self.settings.add_blacklist_program(program);
+            return true;
+        }
+        return false;
+    }
+    // Removing denied programs by their name
+    pub fn remove_blacklist_program(&mut self, program: String) -> bool
+    {
+        if self.settings.get_blacklist_programs().contains(&program)
+        {
+            self.settings.strip_blacklist_program(program);
+            return true;
+        }
+        return false;
+    }
+    // Adding whitelisted program
+    pub fn add_whitelist_program(&mut self, program: String) -> bool
+    {
+        if !self.settings.get_whitelist_programs().contains(&program)
+        {
+            self.settings.add_whitelist_program(program);
+            return true;
+        }
+        return false;
+    }
+    // Adding blacklisted program
+    pub fn add_blacklist_program(&mut self, program: String) -> bool
+    {
+        if !self.settings.get_blacklist_programs().contains(&program)
+        {
+            self.settings.add_blacklist_program(program);
+            return true;
+        }
+        return false;
+    }
+
+    //
     // Handling users based on settings and updating allow lists during runtime based on user input
+    //
+    // Auto removing users
     pub fn handle_users(&mut self)
     {
         if self.settings.get_av_status()
@@ -205,30 +339,63 @@ impl AVEngine
             {
                 if !allowed_users.contains(user)
                 {
-                    println!("Detected unknown user: {}", user);
-                    if self.settings.get_user_on_detection()
-                    {
-                        remove_user(user.clone());
-                    } else {
-                        let mut input_value: String = String::new();
-                        println!("Select one of the following. [allow, deny] (deny is default)");
-                        io::stdin().read_line(&mut input_value).expect("Cannot read user input.");
-                        let check_value: &str = &input_value.as_str();
-                        match check_value
-                        {
-                            "allow\r\n" => {
-                                self.settings.add_whitelist_user(user.clone());
-                            },
-                            _ => {
-                                remove_user(user.clone());
-                            }
-                        }
-                    }
+                    let mut alert: String = format!("Detected unknown user: {}", user);
+                    self.logger.log_string(alert);
+                    remove_user(user.clone());
+                    alert = format!("Automatically removed unknown user: {}", user);
+                    self.logger.log_string(alert);
                 }
             }
         }
     }
+    // Returning any new users
+    pub fn detect_users(&mut self) -> Option<Vec<String>>
+    {
+        if self.settings.get_av_status()
+        {
+            let mut found: Vec<String> = Vec::new();
+            let allowed_users: Vec<String> = self.settings.get_whitelist_users();
+            for user in get_current_users().iter()
+            {
+                if !allowed_users.contains(user)
+                {
+                    let alert: String = format!("Detected unknown user: {}", user);
+                    self.logger.log_string(alert);
+                    found.push(user.clone());
+                }
+            }
+            if found.len() == 0
+            {
+                return None;
+            }
+            return Some(found);
+        }
+        return None;
+    }
+    // Removing a whitelisted user through a name
+    pub fn remove_user(&mut self, user: String) -> bool
+    {
+        if self.settings.get_whitelist_users().contains(&user)
+        {
+            self.settings.strip_whitelist_user(user);
+            return true;
+        }
+        return false;
+    }
+    // Adding a user to the whitelist
+    pub fn add_user(&mut self, user: String) -> bool
+    {
+        if self.settings.get_whitelist_users().contains(&user)
+        {
+            self.settings.add_whitelist_user(user);
+            return true;
+        }
+        return false;
+    }
+
+    //
     // Editing the AV settings
+    //
     pub fn disable_engine(&mut self)
     {
         self.settings.disable_av();
@@ -237,7 +404,9 @@ impl AVEngine
     {
         self.settings.enable_av();
     }
+    //
     // Getting current settings
+    //
     pub fn get_users(&mut self) -> Vec<String>
     {
         return self.settings.get_whitelist_users();
@@ -246,16 +415,27 @@ impl AVEngine
     {
         return self.settings.get_whitelist_programs();
     }
+    pub fn get_blocked_programs(&mut self) -> Vec<String>
+    {
+        return self.settings.get_blacklist_programs();
+    }
+    pub fn status(&mut self) -> bool
+    {
+        return self.settings.get_av_status();
+    }
+
+    //
     // Snapshot functions
-    pub fn take_program_snapshot() -> Vec<(String, u32)>
+    //
+    pub fn take_program_snapshot(&mut self) -> Vec<(String, u32)>
     {
         return get_running_processes();
     }
-    pub fn take_program_name_snapshot() -> Vec<String>
+    pub fn take_program_name_snapshot(&mut self) -> Vec<String>
     {
         return filter_program_list(get_running_processes());
     }
-    pub fn take_user_snapshot() -> Vec<String>
+    pub fn take_user_snapshot(&mut self) -> Vec<String>
     {
         return get_current_users();
     }

@@ -29,6 +29,15 @@ Version 0.1 is terminal based and requires the script to be ran with admin perms
     7) Doesnt check for tampering with AV software
     8) Changing settings requires a recompile of the program
 
+### Version 0.2
+
+    1) Doesnt save whitelist or blacklist
+    2) Doesnt save logs
+    3) No way to update the program either automatically or through GUI
+    4) Doesnt prompt user for Administrator account access through UAC
+    5) Runs in user space with local administrator privileges
+    6) Doesnt check for tampering with AV software
+
 ## Planned Updates
 
 ### Version 0.1 -> 0.2
@@ -37,3 +46,10 @@ Version 0.1 is terminal based and requires the script to be ran with admin perms
     2) Adding a black list
     3) Adding logging (already written)
     4) Prompt user for Administrator account access through UAC
+
+### Version 0.2 -> 0.3
+
+    1) Adding a basic updater and access to updater through GUI
+    2) Prompt user for Aministrator account access through UAC
+    3) Save blacklists and whitelists
+    4) Save logs
