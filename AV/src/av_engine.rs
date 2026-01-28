@@ -20,14 +20,12 @@ use super::logging::*;
 #[derive(Debug)]
 struct Settings
 {
-    // Detection automation based
-    kill_process_on_detection: bool,
-    kill_user_on_detection: bool,
     run: bool,
     // Allow / exemptions
     whitelist_users: Vec<String>,
+    watched_programs: Vec<String>,
     whitelist_programs: Vec<String>,
-    blacklist_programs: Vec<String>,
+    blacklist_programs: Vec<String>
 }
 
 #[derive(Debug)]
@@ -67,10 +65,9 @@ impl Settings
             allowed_users.append(&mut users);
         }
         let settings: Settings = Settings {
-            kill_process_on_detection: stop_process_on_detection,
-            kill_user_on_detection: remove_user_on_detection,
             run: false,
             whitelist_users: allowed_users,
+            watched_programs: Vec::new(),
             whitelist_programs: allowed_programs,
             blacklist_programs: denied_programs
         };
@@ -80,24 +77,6 @@ impl Settings
     //
     // Changing settings functions
     //
-    // On program detection action
-    fn enable_process_on_detection(&mut self)
-    {
-        self.kill_process_on_detection = true;
-    }
-    fn disable_process_on_detection(&mut self)
-    {
-        self.kill_process_on_detection = false;
-    }
-    // On user detection action
-    fn enable_user_on_detection(&mut self)
-    {
-        self.kill_user_on_detection = true;
-    }
-    fn disable_user_on_detection(&mut self)
-    {
-        self.kill_user_on_detection = false;
-    }
     // Enable AV
     fn enable_av(&mut self)
     {
@@ -150,9 +129,21 @@ impl Settings
     {
         _ = self.blacklist_programs.remove(program_index);
     }
-    fn strip_blacklist_program(&mut self, mut program: String)
+    fn strip_blacklist_program(&mut self, program: String)
     {
         _ = self.blacklist_programs.dedup_by_key(|key| key == &program);
+    }
+
+    //
+    // Watched programs
+    //
+    fn add_watched_program(&mut self, program_name: String)
+    {
+        self.watched_programs.push(program_name);
+    }
+    fn remove_watched_program(&mut self, program_name: String)
+    {
+        self.watched_programs.dedup_by_key(|key| key == &program_name);
     }
 
     //
@@ -183,14 +174,6 @@ impl Settings
     //
     // Getting settings functions
     //
-    fn get_process_on_detection(&mut self) -> bool
-    {
-        return self.kill_process_on_detection.clone();
-    }
-    fn get_user_on_detection(&mut self) -> bool
-    {
-        return self.kill_user_on_detection.clone();
-    }
     fn get_av_status(&mut self) -> bool
     {
         return self.run.clone();
@@ -206,6 +189,10 @@ impl Settings
     fn get_whitelist_users(&mut self) -> Vec<String>
     {
         return self.whitelist_users.clone();
+    }
+    fn get_watched_programs(&mut self) -> Vec<String>
+    {
+        return self.watched_programs.clone();
     }
 }
 
@@ -228,16 +215,28 @@ impl AVEngine
     // Handling processes based on settings and updating allow lists during runtime based on user input
     pub fn handle_processes(&mut self)
     {
+        let allowed_programs: Vec<String> = self.settings.get_whitelist_programs();
+        let disallowed_programs: Vec<String> = self.settings.get_blacklist_programs();
+        let running_programs: Vec<(String, u32)> = get_running_processes();
         if self.settings.get_av_status()
         {
-            let allowed_programs: Vec<String> = self.settings.get_whitelist_programs();
-            let running_programs: Vec<(String, u32)> = get_running_processes();
             for program in running_programs
             {
                 let (program_name, program_pid) = program;
                 if !allowed_programs.contains(&program_name)
                 {
                     let alert: String = format!("Detected unsaved program: {} - PID: {:?}", program_name, program_pid);
+                    self.logger.log_string(alert);
+                    kill_pid(program_pid);
+                }
+            }
+        } else {
+            for program in running_programs
+            {
+                let (program_name, program_pid) = program;
+                if disallowed_programs.contains(&program_name)
+                {
+                    let alert: String = format!("Detected blacklisted program: {} - PID: {:?}", program_name, program_pid);
                     self.logger.log_string(alert);
                     kill_pid(program_pid);
                 }
@@ -249,15 +248,17 @@ impl AVEngine
     {
         let mut found: Vec<String> = Vec::new();
         let allowed_programs: Vec<String> = self.settings.get_whitelist_programs();
+        let watched_programs: Vec<String> = self.settings.get_watched_programs();
         for program in get_running_processes().iter()
         {
             let (program_name, program_pid) = program;
-            if !allowed_programs.contains(program_name)
+            if !allowed_programs.contains(program_name) && !watched_programs.contains(program_name)
             {
                 let alert: String = format!("Questioning unsaved program: {} - PID: {}", program_name, program_pid);
                 println!("{}", alert);
                 self.logger.log_string(alert);
                 found.push(program_name.clone());
+                self.settings.add_watched_program(program_name.to_owned());
             }
         }
         if found.len() > 0
@@ -310,6 +311,10 @@ impl AVEngine
     {
         if !self.settings.get_whitelist_programs().contains(&program)
         {
+            if self.settings.get_watched_programs().contains(&program)
+            {
+                self.settings.remove_watched_program(program.clone());
+            }
             self.settings.add_whitelist_program(program);
             return true;
         }
@@ -320,6 +325,10 @@ impl AVEngine
     {
         if !self.settings.get_blacklist_programs().contains(&program)
         {
+            if self.settings.get_watched_programs().contains(&program)
+            {
+                self.settings.remove_watched_program(program.clone());
+            }
             self.settings.add_blacklist_program(program);
             return true;
         }
@@ -404,6 +413,7 @@ impl AVEngine
     {
         self.settings.enable_av();
     }
+
     //
     // Getting current settings
     //

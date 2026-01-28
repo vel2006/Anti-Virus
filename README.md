@@ -12,9 +12,9 @@ This is currently a PoC program and should not be used on real servers due to po
 
 ## Usage
 
-### Version 0.1
+### Version 0.2
 
-Version 0.1 is terminal based and requires the script to be ran with admin perms (will not prompt for admin perms) to remove users. Configuration of script settings is done before building, which is to be changed in future updates. When a new program or user is detected the script will either automatically remove the content or prompt the user if they wish to allow or deny the possible threat. If the user does not type in 'allow' the program will asume that the user wishes to deny the media and will act acordingly. If the user does allow the possible threat, the program will automatically add it to the whitelist.
+Version 0.2 adds a GUI for the user to interact with. The main difference is that. The back-end and functionality does not change, however it does not work against user accounts currently. This will be addressed within the next update to version 0.3.
 
 ## Problems
 
@@ -53,3 +53,6 @@ Version 0.1 is terminal based and requires the script to be ran with admin perms
     2) Prompt user for Aministrator account access through UAC
     3) Save blacklists and whitelists
     4) Save logs
+    5) Analize users
+    6) Check program hash thorugh elivated service in NT AUTHORITY \ SYSTEM
+    7) Load blacklists and whitelists from disk with hash checks

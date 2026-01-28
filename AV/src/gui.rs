@@ -1,7 +1,7 @@
 // Importing the iced framework for the GUI (I am not making it from scratch.)
 use iced::{
     Fill, Task, Theme, Length, Element, application, Subscription, time,
-    widget::{text, column, row, container, button, Text, Column, Scrollable},
+    widget::{text, column, row, container, button, Text, Column, Scrollable}
 };
 use std::time::Duration;
 
